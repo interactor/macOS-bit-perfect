@@ -220,7 +220,8 @@ class OutputDevices: ObservableObject {
         }
         else if !recursion {
             if let sampleRate = getSampleRateFromAppleScript() {
-                let desiredSampleRate = sampleRate * 1000
+                // AppleScript may return either kHz (e.g. 44.1) or Hz (e.g. 44100) depending on macOS/Music.
+                let desiredSampleRate = sampleRate >= 1000 ? sampleRate : sampleRate * 1000
                 if desiredSampleRate != previousSampleRate {
                     defaultDevice?.setNominalSampleRate(desiredSampleRate)
                     self.updateSampleRate(desiredSampleRate)

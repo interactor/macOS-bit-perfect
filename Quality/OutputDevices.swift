@@ -253,7 +253,7 @@ class OutputDevices: ObservableObject {
         guard let defaultDevice else { return }
 
         if enableBitDepthDetection,
-           let formats = getFormats(bestStat: CMPlayerStats(sampleRate: nonMusicDefaultSampleRate, bitDepth: Int(nonMusicDefaultBitDepth), date: .now, priority: 0), device: defaultDevice) {
+           let formats = getFormats(bestStat: CMPlayerStats(sampleRate: nonMusicDefaultSampleRate, bitDepth: Int(nonMusicDefaultBitDepth), date: Date(), priority: 0), device: defaultDevice) {
             let nearest = formats.min(by: {
                 abs($0.mSampleRate - nonMusicDefaultSampleRate) < abs($1.mSampleRate - nonMusicDefaultSampleRate)
             })

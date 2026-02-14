@@ -94,7 +94,8 @@ class OutputDevices: ObservableObject {
             .publish(every: 2, on: .main, in: .default)
             .autoconnect()
             .sink { _ in
-                if self.timerCalls == 5 {
+                // Keep retrying longer since sample rate detection may lag on newer macOS versions.
+                if self.timerCalls == 30 {
                     self.timerCalls = 0
                     self.timerCancellable?.cancel()
                     self.timerCancellable = nil
@@ -166,7 +167,9 @@ class OutputDevices: ObservableObject {
     }
     
     func switchLatestSampleRate(recursion: Bool = false) {
-        if currentNowPlayingBundleId != nil,
+        if currentTrack != nil,
+           currentTrack?.isMusicApp == false,
+           currentNowPlayingBundleId != nil,
            currentNowPlayingBundleId != musicBundleId {
             self.applyNonMusicDefaultFormat()
             return

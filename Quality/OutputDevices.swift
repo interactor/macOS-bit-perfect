@@ -171,10 +171,13 @@ class OutputDevices: ObservableObject {
                 return
             }
             
-            if sampleRate == 48000 {
+            // On some macOS versions, the first detection for a new track can be a transient 48kHz.
+            // Avoid switching immediately and retry shortly after to improve accuracy.
+            if sampleRate == 48000, !recursion {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                     self.switchLatestSampleRate(recursion: true)
                 }
+                return
             }
             
             let formats = self.getFormats(bestStat: first, device: defaultDevice!)!

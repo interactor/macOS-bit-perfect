@@ -20,7 +20,12 @@ enum EntryType: String {
     case coreMedia = "com.apple.coremedia"
     
     var predicate: NSPredicate {
-        NSPredicate(format: "(subsystem = %@) AND (process = %@)", argumentArray: [rawValue, "Music"])
+        // Newer macOS versions sometimes emit logs with a slightly different `process` value,
+        // so prefer matching the subsystem and a loose process prefix.
+        NSPredicate(
+            format: "(subsystem = %@) AND (process BEGINSWITH %@)",
+            argumentArray: [rawValue, "Music"]
+        )
     }
 }
 
@@ -28,7 +33,7 @@ class Console {
     static func getRecentEntries(type: EntryType) throws -> [SimpleConsole] {
         var messages = [SimpleConsole]()
         let store = try OSLogStore.local()
-        let duration = store.position(timeIntervalSinceEnd: -3.0)
+        let duration = store.position(timeIntervalSinceEnd: -10.0)
         let entries = try store.getEntries(with: [], at: duration, matching: type.predicate)
         // for some reason AnySequence to Array turns it into a empty array?
         for entry in entries {

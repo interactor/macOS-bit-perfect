@@ -22,8 +22,11 @@ jobs:
             -project Quality.xcodeproj \
             -scheme LosslessSwitcher \
             -configuration Release \
+            -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=YES \
+            ARCHS=arm64
 
       - name: Package .app
         run: |

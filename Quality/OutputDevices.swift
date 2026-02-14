@@ -32,6 +32,12 @@ class OutputDevices: ObservableObject {
     var trackAndSample = [MediaTrack : Float64]()
     var previousTrack: MediaTrack?
     var currentTrack: MediaTrack?
+
+    var currentNowPlayingBundleId: String?
+
+    private let musicBundleId = "com.apple.Music"
+    private let nonMusicDefaultSampleRate: Float64 = 48_000
+    private let nonMusicDefaultBitDepth: Int32 = 24
     
     var timerActive = false
     var timerCalls = 0
@@ -147,6 +153,12 @@ class OutputDevices: ObservableObject {
     }
     
     func switchLatestSampleRate(recursion: Bool = false) {
+        if currentNowPlayingBundleId != nil,
+           currentNowPlayingBundleId != musicBundleId {
+            self.applyNonMusicDefaultFormat()
+            return
+        }
+
         let allStats = self.getAllStats()
         let defaultDevice = self.selectedOutputDevice ?? self.defaultOutputDevice
         
@@ -207,6 +219,14 @@ class OutputDevices: ObservableObject {
 //            }
         }
         else if !recursion {
+            if let sampleRate = getSampleRateFromAppleScript() {
+                let desiredSampleRate = sampleRate * 1000
+                if desiredSampleRate != previousSampleRate {
+                    defaultDevice?.setNominalSampleRate(desiredSampleRate)
+                    self.updateSampleRate(desiredSampleRate)
+                }
+                return
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 self.switchLatestSampleRate(recursion: true)
             }
@@ -226,6 +246,37 @@ class OutputDevices: ObservableObject {
 //            }
         }
 
+    }
+
+    private func applyNonMusicDefaultFormat() {
+        let defaultDevice = self.selectedOutputDevice ?? self.defaultOutputDevice
+        guard let defaultDevice else { return }
+
+        if enableBitDepthDetection,
+           let formats = getFormats(bestStat: CMPlayerStats(sampleRate: nonMusicDefaultSampleRate, bitDepth: Int(nonMusicDefaultBitDepth), date: .now, priority: 0), device: defaultDevice) {
+            let nearest = formats.min(by: {
+                abs($0.mSampleRate - nonMusicDefaultSampleRate) < abs($1.mSampleRate - nonMusicDefaultSampleRate)
+            })
+
+            let nearestBitDepth = formats.min(by: {
+                abs(Int32($0.mBitsPerChannel) - nonMusicDefaultBitDepth) < abs(Int32($1.mBitsPerChannel) - nonMusicDefaultBitDepth)
+            })
+
+            let nearestFormat = formats.first(where: {
+                $0.mSampleRate == nearest?.mSampleRate && $0.mBitsPerChannel == nearestBitDepth?.mBitsPerChannel
+            })
+
+            if let nearestFormat {
+                setFormats(device: defaultDevice, format: nearestFormat)
+                updateSampleRate(nearestFormat.mSampleRate)
+            }
+            return
+        }
+
+        if nonMusicDefaultSampleRate != previousSampleRate {
+            defaultDevice.setNominalSampleRate(nonMusicDefaultSampleRate)
+            updateSampleRate(nonMusicDefaultSampleRate)
+        }
     }
     
     func getFormats(bestStat: CMPlayerStats, device: AudioDevice) -> [AudioStreamBasicDescription]? {

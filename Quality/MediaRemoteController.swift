@@ -27,6 +27,11 @@ class MediaRemoteController {
                     MRMediaRemoteGetNowPlayingInfo(.main) { info in
                         if let info = info as? [String : Any] {
                             let currentTrack = MediaTrack(mediaRemote: info)
+                            MRMediaRemoteGetNowPlayingClient(.main) { client in
+                                DispatchQueue.main.async {
+                                    outputDevices.currentNowPlayingBundleId = client?.bundleIdentifier
+                                }
+                            }
                             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                                 print("Current Track \(outputDevices.currentTrack?.title ?? "nil"), previous: \(outputDevices.previousTrack?.title ?? "nil"), isSame: \(outputDevices.previousTrack == outputDevices.currentTrack)")
                                 outputDevices.previousTrack = outputDevices.currentTrack

@@ -25,6 +25,7 @@ class OutputDevices: ObservableObject {
     private var defaultChangesCancellable: AnyCancellable?
     private var timerCancellable: AnyCancellable?
     private var outputSelectionCancellable: AnyCancellable?
+    private var deviceFormatMonitorCancellable: AnyCancellable?
     
     private var consoleQueue = DispatchQueue(label: "consoleQueue", qos: .userInteractive)
     
@@ -66,6 +67,15 @@ class OutputDevices: ObservableObject {
             self.enableBitDepthDetection = newValue
         })
 
+        // Keep the status item in sync even when the user changes the format manually
+        // via Audio MIDI Setup (CoreAudio notifications are not always reliable across macOS versions).
+        deviceFormatMonitorCancellable = Timer
+            .publish(every: 1, on: .main, in: .default)
+            .autoconnect()
+            .sink { _ in
+                self.getDeviceSampleRate()
+            }
+
         
     }
     
@@ -74,6 +84,7 @@ class OutputDevices: ObservableObject {
         defaultChangesCancellable?.cancel()
         timerCancellable?.cancel()
         enableBitDepthDetectionCancellable?.cancel()
+        deviceFormatMonitorCancellable?.cancel()
         //timer.upstream.connect().cancel()
     }
     
@@ -100,7 +111,9 @@ class OutputDevices: ObservableObject {
     func getDeviceSampleRate() {
         let defaultDevice = self.selectedOutputDevice ?? self.defaultOutputDevice
         guard let sampleRate = defaultDevice?.nominalSampleRate else { return }
-        self.updateSampleRate(sampleRate)
+        if sampleRate != self.previousSampleRate {
+            self.updateSampleRate(sampleRate)
+        }
     }
     
     func getSampleRateFromAppleScript() -> Double? {

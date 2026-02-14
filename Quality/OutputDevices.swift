@@ -90,12 +90,14 @@ class OutputDevices: ObservableObject {
     
     func renewTimer() {
         if timerCancellable != nil { return }
+        Diagnostics.shared.log("OutputDevices: renewTimer()")
         timerCancellable = Timer
             .publish(every: 2, on: .main, in: .default)
             .autoconnect()
             .sink { _ in
                 // Keep retrying longer since sample rate detection may lag on newer macOS versions.
                 if self.timerCalls == 30 {
+                    Diagnostics.shared.log("OutputDevices: renewTimer() done")
                     self.timerCalls = 0
                     self.timerCancellable?.cancel()
                     self.timerCancellable = nil
@@ -113,6 +115,7 @@ class OutputDevices: ObservableObject {
         let defaultDevice = self.selectedOutputDevice ?? self.defaultOutputDevice
         guard let sampleRate = defaultDevice?.nominalSampleRate else { return }
         if sampleRate != self.previousSampleRate {
+            Diagnostics.shared.log("OutputDevices: device sampleRate changed -> \(sampleRate)")
             self.updateSampleRate(sampleRate)
         }
     }
@@ -157,20 +160,22 @@ class OutputDevices: ObservableObject {
             }
 
             allStats.sort(by: {$0.priority > $1.priority})
-            print("[getAllStats] \(allStats)")
+            Diagnostics.shared.log("OutputDevices: getAllStats() -> \(allStats.map { "sr=\($0.sampleRate) bd=\($0.bitDepth) p=\($0.priority)" }.joined(separator: ", "))")
         }
         catch {
-            print("[getAllStats, error] \(error)")
+            Diagnostics.shared.log("OutputDevices: getAllStats() error: \(error)")
         }
         
         return allStats
     }
     
     func switchLatestSampleRate(recursion: Bool = false) {
+        Diagnostics.shared.log("OutputDevices: switchLatestSampleRate(recursion=\(recursion)) bundleId=\(currentNowPlayingBundleId ?? "nil"), isMusicApp=\(currentTrack?.isMusicApp.description ?? "nil")")
         if currentTrack != nil,
            currentTrack?.isMusicApp == false,
            currentNowPlayingBundleId != nil,
            currentNowPlayingBundleId != musicBundleId {
+            Diagnostics.shared.log("OutputDevices: applying non-music default format")
             self.applyNonMusicDefaultFormat()
             return
         }
@@ -181,6 +186,8 @@ class OutputDevices: ObservableObject {
         if let first = allStats.first, let supported = defaultDevice?.nominalSampleRates {
             let sampleRate = Float64(first.sampleRate)
             let bitDepth = Int32(first.bitDepth)
+
+            Diagnostics.shared.log("OutputDevices: bestStat sampleRate=\(sampleRate) bitDepth=\(bitDepth)")
             
             if self.currentTrack == self.previousTrack, let prevSampleRate = currentSampleRate, prevSampleRate > sampleRate {
                 print("same track, prev sample rate is higher")
@@ -220,6 +227,7 @@ class OutputDevices: ObservableObject {
                 else if suitableFormat.mSampleRate != previousSampleRate { // bit depth disabled
                     defaultDevice?.setNominalSampleRate(suitableFormat.mSampleRate)
                 }
+                Diagnostics.shared.log("OutputDevices: switching to sampleRate=\(suitableFormat.mSampleRate) bits=\(suitableFormat.mBitsPerChannel)")
                 self.updateSampleRate(suitableFormat.mSampleRate)
                 if let currentTrack = currentTrack {
                     self.trackAndSample[currentTrack] = suitableFormat.mSampleRate
@@ -242,6 +250,7 @@ class OutputDevices: ObservableObject {
                 // AppleScript may return either kHz (e.g. 44.1) or Hz (e.g. 44100) depending on macOS/Music.
                 let desiredSampleRate = sampleRate >= 1000 ? sampleRate : sampleRate * 1000
                 if desiredSampleRate != previousSampleRate {
+                    Diagnostics.shared.log("OutputDevices: AppleScript fallback -> \(desiredSampleRate)")
                     defaultDevice?.setNominalSampleRate(desiredSampleRate)
                     self.updateSampleRate(desiredSampleRate)
                 }

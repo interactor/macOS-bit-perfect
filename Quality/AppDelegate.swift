@@ -19,6 +19,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let defaults = Defaults.shared
     private var mrController: MediaRemoteController!
     private var devicesMenu: NSMenu!
+    private var diagnosticsMenuItem: NSMenuItem?
     
     var statusItem: NSStatusItem?
     var cancellable: AnyCancellable?
@@ -60,6 +61,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         AppDelegate.instance = self
         outputDevices = OutputDevices()
         mrController = MediaRemoteController(outputDevices: outputDevices)
+
+        Diagnostics.shared.log("App: launched version=\(currentVersion) build=\(currentBuild)")
         
         checkPermissions()
         
@@ -110,6 +113,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         scriptMenu.submenu?.addItem(resetScript)
         scriptMenu.submenu?.addItem(currentScriptSelectionMenuItem)
         menu.addItem(scriptMenu)
+
+        let diagnosticsMenu = NSMenuItem(title: "Diagnostics", action: nil, keyEquivalent: "")
+        diagnosticsMenu.submenu = NSMenu()
+        diagnosticsMenu.submenu?.addItem(NSMenuItem(title: "Copy status", action: #selector(copyDiagnosticsStatus(_:)), keyEquivalent: ""))
+        diagnosticsMenu.submenu?.addItem(NSMenuItem(title: "Export debug log", action: #selector(exportDiagnosticsLog(_:)), keyEquivalent: ""))
+        self.diagnosticsMenuItem = diagnosticsMenu
+        menu.addItem(diagnosticsMenu)
         
         let quitItem = NSMenuItem(title: "Quit", action: #selector(NSApp.terminate(_:)), keyEquivalent: "")
         menu.addItem(quitItem)
@@ -123,6 +133,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.handleDevicesMenu()
         })
 
+    }
+
+    @objc private func copyDiagnosticsStatus(_ item: NSMenuItem) {
+        let bundleId = outputDevices.currentNowPlayingBundleId ?? "nil"
+        let isMusicApp = outputDevices.currentTrack?.isMusicApp.description ?? "nil"
+        let title = outputDevices.currentTrack?.title ?? "nil"
+        let sampleRate = outputDevices.currentSampleRate.map { String(format: "%.1f kHz", $0) } ?? "nil"
+        let device = (outputDevices.selectedOutputDevice ?? outputDevices.defaultOutputDevice)?.name ?? "nil"
+
+        let status = """
+        LosslessSwitcher Diagnostics
+        - version: \(currentVersion) (\(currentBuild))
+        - device: \(device)
+        - nowPlaying bundleId: \(bundleId)
+        - nowPlaying isMusicApp: \(isMusicApp)
+        - track: \(title)
+        - app sampleRate label: \(sampleRate)
+        """
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(status, forType: .string)
+
+        Diagnostics.shared.log("Diagnostics: copied status")
+    }
+
+    @objc private func exportDiagnosticsLog(_ item: NSMenuItem) {
+        do {
+            let url = try Diagnostics.shared.writeLogFile()
+            Diagnostics.shared.log("Diagnostics: exported log -> \(url.path)")
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+        catch {
+            Diagnostics.shared.log("Diagnostics: export failed: \(error)")
+            let alert = NSAlert()
+            alert.messageText = "Export failed"
+            alert.informativeText = String(describing: error)
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
     }
     
     func handleDevicesMenu() {

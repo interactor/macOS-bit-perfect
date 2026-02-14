@@ -23,13 +23,14 @@ class MediaRemoteController {
                 .throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)
                 .sink(receiveValue: { notification in
                         //print(notification)
-                    print("Info Changed Notification Received")
+                    Diagnostics.shared.log("MediaRemote: nowPlayingInfoDidChange")
                     MRMediaRemoteGetNowPlayingInfo(.main) { info in
                         if let info = info as? [String : Any] {
                             let currentTrack = MediaTrack(mediaRemote: info)
                             MRMediaRemoteGetNowPlayingClient(.main) { client in
                                 DispatchQueue.main.async {
                                     outputDevices.currentNowPlayingBundleId = client?.bundleIdentifier
+                                    Diagnostics.shared.log("MediaRemote: client bundleId=\(client?.bundleIdentifier ?? "nil"), isMusicApp=\(currentTrack.isMusicApp), title=\(currentTrack.title ?? "nil")")
                                 }
                             }
                             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
@@ -55,6 +56,7 @@ class MediaRemoteController {
                 })
         
         MRMediaRemoteRegisterForNowPlayingNotifications(.main)
+        Diagnostics.shared.log("MediaRemote: registered for now playing notifications")
     }
     
     func send(command: MRMediaRemoteCommand, ifBundleMatches bundleId: String, completion: @escaping () -> ()) {

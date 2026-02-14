@@ -20,12 +20,9 @@ enum EntryType: String {
     case coreMedia = "com.apple.coremedia"
     
     var predicate: NSPredicate {
-        // Newer macOS versions sometimes emit logs with a slightly different `process` value,
-        // so prefer matching the subsystem and a loose process prefix.
-        NSPredicate(
-            format: "(subsystem = %@) AND (process BEGINSWITH %@)",
-            argumentArray: [rawValue, "Music"]
-        )
+        // Prefer matching the subsystem only. On newer macOS versions the `process` field
+        // may vary (e.g. Music, musicd), and we further filter by message patterns anyway.
+        NSPredicate(format: "subsystem = %@", rawValue)
     }
 }
 
@@ -49,6 +46,8 @@ class Console {
         lookbackSeconds: TimeInterval = 10,
         maxEntries: Int = 2_000
     ) throws -> [SimpleConsole] {
+        // We iterate newest -> oldest for speed (early cutoff), then reverse
+        // so callers see logs in chronological order (oldest -> newest).
         var messages = [SimpleConsole]()
         messages.reserveCapacity(min(maxEntries, 256))
 
@@ -68,6 +67,7 @@ class Console {
             }
         }
 
+        messages.reverse()
         return messages
     }
 }

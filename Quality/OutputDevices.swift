@@ -49,6 +49,8 @@ class OutputDevices: ObservableObject {
     private let pollIntervalSeconds: TimeInterval = 0.5
     private let musicIdleRevertAfterSeconds: TimeInterval = 10
     private let musicSwitchWindowSeconds: TimeInterval = 0.5
+
+    private let osLogLookbackSeconds: TimeInterval = 20
     
     var timerActive = false
     var timerCalls = 0
@@ -194,25 +196,41 @@ class OutputDevices: ObservableObject {
     }
     
     func getAllStats() -> [CMPlayerStats] {
-        // Fast path for frequent polling: rely on Music logs only.
+        // Frequent polling: keep per-call work bounded, but gather enough context
+        // to understand where the stats appear on newer macOS versions.
         var allStats = [CMPlayerStats]()
+
         do {
             let pollStart = Date()
-            let musicLogs = try Console.getRecentEntries(type: .music, lookbackSeconds: 2, maxEntries: 400)
 
+            let lookback = osLogLookbackSeconds
+            let musicLogs = try Console.getRecentEntries(type: .music, lookbackSeconds: lookback, maxEntries: 1_000)
+            let coreMediaLogs = try Console.getRecentEntries(type: .coreMedia, lookbackSeconds: lookback, maxEntries: 1_000)
+            let coreAudioLogs = try Console.getRecentEntries(type: .coreAudio, lookbackSeconds: lookback, maxEntries: 1_000)
+
+            allStats.append(contentsOf: CMPlayerParser.parseCoreAudioConsoleLogs(coreAudioLogs))
+            allStats.append(contentsOf: CMPlayerParser.parseCoreMediaConsoleLogs(coreMediaLogs))
             allStats.append(contentsOf: CMPlayerParser.parseMusicConsoleLogs(musicLogs))
             allStats.sort(by: { $0.priority > $1.priority })
 
             let elapsedMs = Int(Date().timeIntervalSince(pollStart) * 1000)
-            if let newest = musicLogs.first?.date {
-                let newestAge = Date().timeIntervalSince(newest)
-                Diagnostics.shared.log("OutputDevices: getAllStats(\(elapsedMs)ms, newestAge=\(String(format: "%.3f", newestAge))s) -> \(allStats.map { "sr=\($0.sampleRate) bd=\($0.bitDepth) p=\($0.priority)" }.joined(separator: ", "))")
-            } else {
-                Diagnostics.shared.log("OutputDevices: getAllStats(\(elapsedMs)ms, empty) -> \(allStats.map { "sr=\($0.sampleRate) bd=\($0.bitDepth) p=\($0.priority)" }.joined(separator: ", "))")
+
+            func newestAgeString(_ logs: [SimpleConsole]) -> String {
+                guard let newest = logs.last?.date else { return "nil" }
+                return String(format: "%.3f", Date().timeIntervalSince(newest))
             }
+
+            Diagnostics.shared.log(
+                "OutputDevices: getAllStats(\(elapsedMs)ms) " +
+                "music=\(musicLogs.count) age=\(newestAgeString(musicLogs))s " +
+                "cm=\(coreMediaLogs.count) age=\(newestAgeString(coreMediaLogs))s " +
+                "ca=\(coreAudioLogs.count) age=\(newestAgeString(coreAudioLogs))s " +
+                "-> \(allStats.map { "sr=\($0.sampleRate) bd=\($0.bitDepth) p=\($0.priority)" }.joined(separator: ", "))"
+            )
         } catch {
             Diagnostics.shared.log("OutputDevices: getAllStats() error: \(error)")
         }
+
         return allStats
     }
     

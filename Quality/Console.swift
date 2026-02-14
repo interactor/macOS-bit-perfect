@@ -53,11 +53,15 @@ class Console {
         messages.reserveCapacity(min(maxEntries, 256))
 
         let store = try getStore()
-        let start = store.position(timeIntervalSinceEnd: -lookbackSeconds)
+        let end = store.position(timeIntervalSinceEnd: 0)
+        let cutoff = Date().addingTimeInterval(-lookbackSeconds)
 
         // Iterate from newest to oldest and stop early to keep polling low-latency.
-        let entries = try store.getEntries(with: [.reverse], at: start, matching: type.predicate)
+        let entries = try store.getEntries(with: [.reverse], at: end, matching: type.predicate)
         for case let entry as OSLogEntryLog in entries {
+            if entry.date < cutoff {
+                break
+            }
             messages.append(SimpleConsole(date: entry.date, message: entry.composedMessage))
             if messages.count >= maxEntries {
                 break

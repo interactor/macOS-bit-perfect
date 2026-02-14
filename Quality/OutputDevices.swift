@@ -194,30 +194,25 @@ class OutputDevices: ObservableObject {
     }
     
     func getAllStats() -> [CMPlayerStats] {
+        // Fast path for frequent polling: rely on Music logs only.
         var allStats = [CMPlayerStats]()
-        
         do {
             let pollStart = Date()
-            let musicLogs = try Console.getRecentEntries(type: .music, lookbackSeconds: 2)
-            let coreAudioLogs = try Console.getRecentEntries(type: .coreAudio, lookbackSeconds: 2)
-            let coreMediaLogs = try Console.getRecentEntries(type: .coreMedia, lookbackSeconds: 2)
-            
-            allStats.append(contentsOf: CMPlayerParser.parseMusicConsoleLogs(musicLogs))
-            if enableBitDepthDetection {
-                allStats.append(contentsOf: CMPlayerParser.parseCoreAudioConsoleLogs(coreAudioLogs))
-            }
-            else {
-                allStats.append(contentsOf: CMPlayerParser.parseCoreMediaConsoleLogs(coreMediaLogs))
-            }
+            let musicLogs = try Console.getRecentEntries(type: .music, lookbackSeconds: 2, maxEntries: 400)
 
-            allStats.sort(by: {$0.priority > $1.priority})
+            allStats.append(contentsOf: CMPlayerParser.parseMusicConsoleLogs(musicLogs))
+            allStats.sort(by: { $0.priority > $1.priority })
+
             let elapsedMs = Int(Date().timeIntervalSince(pollStart) * 1000)
-            Diagnostics.shared.log("OutputDevices: getAllStats(\(elapsedMs)ms) -> \(allStats.map { "sr=\($0.sampleRate) bd=\($0.bitDepth) p=\($0.priority)" }.joined(separator: ", "))")
-        }
-        catch {
+            if let newest = musicLogs.first?.date {
+                let newestAge = Date().timeIntervalSince(newest)
+                Diagnostics.shared.log("OutputDevices: getAllStats(\(elapsedMs)ms, newestAge=\(String(format: "%.3f", newestAge))s) -> \(allStats.map { "sr=\($0.sampleRate) bd=\($0.bitDepth) p=\($0.priority)" }.joined(separator: ", "))")
+            } else {
+                Diagnostics.shared.log("OutputDevices: getAllStats(\(elapsedMs)ms, empty) -> \(allStats.map { "sr=\($0.sampleRate) bd=\($0.bitDepth) p=\($0.priority)" }.joined(separator: ", "))")
+            }
+        } catch {
             Diagnostics.shared.log("OutputDevices: getAllStats() error: \(error)")
         }
-        
         return allStats
     }
     

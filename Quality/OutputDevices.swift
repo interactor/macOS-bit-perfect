@@ -26,10 +26,15 @@ class OutputDevices: ObservableObject {
     private var timerCancellable: AnyCancellable?
     private var outputSelectionCancellable: AnyCancellable?
     private var deviceFormatMonitorCancellable: AnyCancellable?
-    
+
+    private var playbackMonitorCancellable: AnyCancellable?
+    private var lastMusicSpecDetectedAt: Date?
+    private var lastNonMusicAppliedAt: Date?
+
     private var consoleQueue = DispatchQueue(label: "consoleQueue", qos: .userInteractive)
     
     private var previousSampleRate: Float64?
+    private var previousBitsPerChannel: UInt32?
     var trackAndSample = [MediaTrack : Float64]()
     var previousTrack: MediaTrack?
     var currentTrack: MediaTrack?
@@ -39,6 +44,10 @@ class OutputDevices: ObservableObject {
     private let musicBundleId = "com.apple.Music"
     private let nonMusicDefaultSampleRate: Float64 = 48_000
     private let nonMusicDefaultBitDepth: Int32 = 24
+
+    private let pollIntervalSeconds: TimeInterval = 0.5
+    private let musicIdleRevertAfterSeconds: TimeInterval = 10
+    private let musicSwitchWindowSeconds: TimeInterval = 0.5
     
     var timerActive = false
     var timerCalls = 0
@@ -76,6 +85,16 @@ class OutputDevices: ObservableObject {
                 self.getDeviceSampleRate()
             }
 
+        // Primary control loop.
+        playbackMonitorCancellable = Timer
+            .publish(every: pollIntervalSeconds, on: .main, in: .default)
+            .autoconnect()
+            .sink { _ in
+                self.consoleQueue.async {
+                    self.monitorPlaybackAndApplyFormat()
+                }
+            }
+
         
     }
     
@@ -85,6 +104,7 @@ class OutputDevices: ObservableObject {
         timerCancellable?.cancel()
         enableBitDepthDetectionCancellable?.cancel()
         deviceFormatMonitorCancellable?.cancel()
+        playbackMonitorCancellable?.cancel()
         //timer.upstream.connect().cancel()
     }
     
@@ -118,6 +138,35 @@ class OutputDevices: ObservableObject {
             Diagnostics.shared.log("OutputDevices: device sampleRate changed -> \(sampleRate)")
             self.updateSampleRate(sampleRate)
         }
+    }
+
+    private func monitorPlaybackAndApplyFormat() {
+        let isMusicRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: musicBundleId).isEmpty
+
+        if isMusicRunning {
+            let allStats = self.getAllStats()
+            if let best = allStats.first {
+                // Avoid switching mid-track (it causes audible drop-outs). Only act on
+                // very recent detections, which should occur at (or right after) track start.
+                let now = Date()
+                let age = now.timeIntervalSince(best.date)
+                if age <= musicSwitchWindowSeconds {
+                    lastMusicSpecDetectedAt = now
+                    switchTo(stat: best)
+                } else {
+                    Diagnostics.shared.log("OutputDevices: bestStat too old (age=\(String(format: "%.3f", age))s), skip")
+                }
+                return
+            }
+
+            // Music is running, but we haven't detected a spec recently -> revert slowly.
+            if let last = lastMusicSpecDetectedAt,
+               Date().timeIntervalSince(last) < musicIdleRevertAfterSeconds {
+                return
+            }
+        }
+
+        applyNonMusicDefaultFormat(rateLimited: true)
     }
     
     func getSampleRateFromAppleScript() -> Double? {
@@ -170,142 +219,149 @@ class OutputDevices: ObservableObject {
     }
     
     func switchLatestSampleRate(recursion: Bool = false) {
-        Diagnostics.shared.log("OutputDevices: switchLatestSampleRate(recursion=\(recursion)) bundleId=\(currentNowPlayingBundleId ?? "nil"), isMusicApp=\(currentTrack?.isMusicApp.description ?? "nil")")
-        if currentTrack != nil,
-           currentTrack?.isMusicApp == false,
-           currentNowPlayingBundleId != nil,
-           currentNowPlayingBundleId != musicBundleId {
-            Diagnostics.shared.log("OutputDevices: applying non-music default format")
-            self.applyNonMusicDefaultFormat()
+        // Kept for compatibility with existing call sites (MediaRemote-triggered).
+        // The primary control loop is `monitorPlaybackAndApplyFormat()`.
+        let allStats = self.getAllStats()
+        if let best = allStats.first {
+            lastMusicSpecDetectedAt = Date()
+            switchTo(stat: best)
             return
         }
-
-        let allStats = self.getAllStats()
-        let defaultDevice = self.selectedOutputDevice ?? self.defaultOutputDevice
-        
-        if let first = allStats.first, let supported = defaultDevice?.nominalSampleRates {
-            let sampleRate = Float64(first.sampleRate)
-            let bitDepth = Int32(first.bitDepth)
-
-            Diagnostics.shared.log("OutputDevices: bestStat sampleRate=\(sampleRate) bitDepth=\(bitDepth)")
-            
-            if self.currentTrack == self.previousTrack, let prevSampleRate = currentSampleRate, prevSampleRate > sampleRate {
-                print("same track, prev sample rate is higher")
-                return
-            }
-            
-            // On some macOS versions, the first detection for a new track can be a transient 48kHz.
-            // Avoid switching immediately and retry shortly after to improve accuracy.
-            if sampleRate == 48000, !recursion {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                    self.switchLatestSampleRate(recursion: true)
-                }
-                return
-            }
-            
-            let formats = self.getFormats(bestStat: first, device: defaultDevice!)!
-            
-            // https://stackoverflow.com/a/65060134
-            let nearest = supported.min(by: {
-                abs($0 - sampleRate) < abs($1 - sampleRate)
-            })
-            
-            let nearestBitDepth = formats.min(by: {
-                abs(Int32($0.mBitsPerChannel) - bitDepth) < abs(Int32($1.mBitsPerChannel) - bitDepth)
-            })
-            
-            let nearestFormat = formats.filter({
-                $0.mSampleRate == nearest && $0.mBitsPerChannel == nearestBitDepth?.mBitsPerChannel
-            })
-            
-            print("NEAREST FORMAT \(nearestFormat)")
-            
-            if let suitableFormat = nearestFormat.first {
-                if enableBitDepthDetection {
-                    self.setFormats(device: defaultDevice, format: suitableFormat)
-                }
-                else if suitableFormat.mSampleRate != previousSampleRate { // bit depth disabled
-                    defaultDevice?.setNominalSampleRate(suitableFormat.mSampleRate)
-                }
-                Diagnostics.shared.log("OutputDevices: switching to sampleRate=\(suitableFormat.mSampleRate) bits=\(suitableFormat.mBitsPerChannel)")
-                self.updateSampleRate(suitableFormat.mSampleRate)
-                if let currentTrack = currentTrack {
-                    self.trackAndSample[currentTrack] = suitableFormat.mSampleRate
-                }
-            }
-
-//            if let nearest = nearest {
-//                let nearestSampleRate = nearest.element
-//                if nearestSampleRate != previousSampleRate {
-//                    defaultDevice?.setNominalSampleRate(nearestSampleRate)
-//                    self.updateSampleRate(nearestSampleRate)
-//                    if let currentTrack = currentTrack {
-//                        self.trackAndSample[currentTrack] = nearestSampleRate
-//                    }
-//                }
-//            }
-        }
-        else if !recursion {
-            if let sampleRate = getSampleRateFromAppleScript() {
-                // AppleScript may return either kHz (e.g. 44.1) or Hz (e.g. 44100) depending on macOS/Music.
-                let desiredSampleRate = sampleRate >= 1000 ? sampleRate : sampleRate * 1000
-                if desiredSampleRate != previousSampleRate {
-                    Diagnostics.shared.log("OutputDevices: AppleScript fallback -> \(desiredSampleRate)")
-                    defaultDevice?.setNominalSampleRate(desiredSampleRate)
-                    self.updateSampleRate(desiredSampleRate)
-                }
-                return
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                self.switchLatestSampleRate(recursion: true)
-            }
-        }
-        else {
-//                print("cache \(self.trackAndSample)")
-            if self.currentTrack == self.previousTrack {
-                print("same track, ignore cache")
-                return
-            }
-//            if let currentTrack = currentTrack, let cachedSampleRate = trackAndSample[currentTrack] {
-//                print("using cached data")
-//                if cachedSampleRate != previousSampleRate {
-//                    defaultDevice?.setNominalSampleRate(cachedSampleRate)
-//                    self.updateSampleRate(cachedSampleRate)
-//                }
-//            }
-        }
-
     }
 
-    private func applyNonMusicDefaultFormat() {
+    private func switchTo(stat: CMPlayerStats) {
         let defaultDevice = self.selectedOutputDevice ?? self.defaultOutputDevice
         guard let defaultDevice else { return }
 
-        if enableBitDepthDetection,
-           let formats = getFormats(bestStat: CMPlayerStats(sampleRate: nonMusicDefaultSampleRate, bitDepth: Int(nonMusicDefaultBitDepth), date: Date(), priority: 0), device: defaultDevice) {
-            let nearest = formats.min(by: {
-                abs($0.mSampleRate - nonMusicDefaultSampleRate) < abs($1.mSampleRate - nonMusicDefaultSampleRate)
-            })
+        let sampleRate = Float64(stat.sampleRate)
+        let bitDepth = Int32(stat.bitDepth)
+        Diagnostics.shared.log("OutputDevices: switchTo(stat) sampleRate=\(sampleRate) bitDepth=\(bitDepth)")
 
-            let nearestBitDepth = formats.min(by: {
-                abs(Int32($0.mBitsPerChannel) - nonMusicDefaultBitDepth) < abs(Int32($1.mBitsPerChannel) - nonMusicDefaultBitDepth)
-            })
+        let formats = getFormats(bestStat: stat, device: defaultDevice) ?? []
 
-            let nearestFormat = formats.first(where: {
-                $0.mSampleRate == nearest?.mSampleRate && $0.mBitsPerChannel == nearestBitDepth?.mBitsPerChannel
-            })
-
-            if let nearestFormat {
-                setFormats(device: defaultDevice, format: nearestFormat)
-                updateSampleRate(nearestFormat.mSampleRate)
-            }
+        if let selected = selectFormat(
+            formats: formats,
+            targetSampleRate: sampleRate,
+            targetBitDepth: bitDepth
+        ) {
+            applyFormat(device: defaultDevice, format: selected, reason: "music")
             return
         }
 
+        // Fallback: sample rate only.
+        if sampleRate != previousSampleRate {
+            Diagnostics.shared.log("OutputDevices: fallback switching nominalSampleRate=\(sampleRate)")
+            defaultDevice.setNominalSampleRate(sampleRate)
+            updateSampleRate(sampleRate)
+        }
+    }
+
+    private func applyNonMusicDefaultFormat(rateLimited: Bool) {
+        if rateLimited {
+            if let last = lastNonMusicAppliedAt, Date().timeIntervalSince(last) < 2 {
+                return
+            }
+        }
+
+        lastNonMusicAppliedAt = Date()
+        let defaultDevice = self.selectedOutputDevice ?? self.defaultOutputDevice
+        guard let defaultDevice else { return }
+
+        let formats = getFormats(
+            bestStat: CMPlayerStats(sampleRate: nonMusicDefaultSampleRate, bitDepth: Int(nonMusicDefaultBitDepth), date: Date(), priority: 0),
+            device: defaultDevice
+        ) ?? []
+
+        if let selected = selectFormat(
+            formats: formats,
+            targetSampleRate: nonMusicDefaultSampleRate,
+            targetBitDepth: nonMusicDefaultBitDepth
+        ) {
+            applyFormat(device: defaultDevice, format: selected, reason: "default")
+            return
+        }
+
+        // Fallback: sample rate only.
         if nonMusicDefaultSampleRate != previousSampleRate {
+            Diagnostics.shared.log("OutputDevices: default fallback nominalSampleRate=\(nonMusicDefaultSampleRate)")
             defaultDevice.setNominalSampleRate(nonMusicDefaultSampleRate)
             updateSampleRate(nonMusicDefaultSampleRate)
         }
+    }
+
+    private func applyFormat(device: AudioDevice, format: AudioStreamBasicDescription, reason: String) {
+        if format.mSampleRate == previousSampleRate,
+           format.mBitsPerChannel == previousBitsPerChannel {
+            return
+        }
+
+        Diagnostics.shared.log("OutputDevices: applyFormat(reason=\(reason)) sr=\(format.mSampleRate) bits=\(format.mBitsPerChannel)")
+        setFormats(device: device, format: format)
+        previousBitsPerChannel = format.mBitsPerChannel
+        updateSampleRate(format.mSampleRate)
+    }
+
+    private enum SampleRateFamily {
+        case fortyFour
+        case fortyEight
+        case unknown
+    }
+
+    private func family(for sampleRate: Float64) -> SampleRateFamily {
+        // Determine which clock family this rate belongs to.
+        // We prefer preserving family (e.g. 44.1k stays in 44.1k family) to avoid audible resampling.
+        let r44100: Float64 = 44_100
+        let r48000: Float64 = 48_000
+        let ratio441 = sampleRate / r44100
+        let ratio48 = sampleRate / r48000
+
+        let dist441 = abs(ratio441 - ratio441.rounded())
+        let dist48 = abs(ratio48 - ratio48.rounded())
+
+        if dist441 < 0.02 { return .fortyFour }
+        if dist48 < 0.02 { return .fortyEight }
+        return .unknown
+    }
+
+    private func selectFormat(
+        formats: [AudioStreamBasicDescription],
+        targetSampleRate: Float64,
+        targetBitDepth: Int32
+    ) -> AudioStreamBasicDescription? {
+        if formats.isEmpty { return nil }
+
+        // 1) Exact match.
+        if let exact = formats.first(where: {
+            $0.mSampleRate == targetSampleRate && Int32($0.mBitsPerChannel) == targetBitDepth
+        }) {
+            return exact
+        }
+
+        let targetFamily = family(for: targetSampleRate)
+
+        func score(_ format: AudioStreamBasicDescription) -> Double {
+            let formatFamily = family(for: format.mSampleRate)
+            let familyPenalty: Double = (targetFamily != .unknown && formatFamily != targetFamily) ? 10_000 : 0
+
+            // Prioritize staying in the same family over being "close" numerically.
+            let sampleRatePenalty = abs(format.mSampleRate - targetSampleRate)
+
+            let bits = Int32(format.mBitsPerChannel)
+            let bitDepthPenalty = abs(Double(bits - targetBitDepth))
+
+            // Avoid 16-bit -> 24-bit if possible.
+            let upconvertPenalty: Double
+            if targetBitDepth == 16 && bits > 16 {
+                upconvertPenalty = 500
+            } else {
+                upconvertPenalty = 0
+            }
+
+            // Prefer bit depth match, but sample rate family is most important.
+            return familyPenalty + sampleRatePenalty + (bitDepthPenalty * 5) + upconvertPenalty
+        }
+
+        return formats.min(by: { score($0) < score($1) })
     }
     
     func getFormats(bestStat: CMPlayerStats, device: AudioDevice) -> [AudioStreamBasicDescription]? {

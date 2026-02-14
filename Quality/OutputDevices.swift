@@ -197,9 +197,10 @@ class OutputDevices: ObservableObject {
         var allStats = [CMPlayerStats]()
         
         do {
-            let musicLogs = try Console.getRecentEntries(type: .music)
-            let coreAudioLogs = try Console.getRecentEntries(type: .coreAudio)
-            let coreMediaLogs = try Console.getRecentEntries(type: .coreMedia)
+            let pollStart = Date()
+            let musicLogs = try Console.getRecentEntries(type: .music, lookbackSeconds: 2)
+            let coreAudioLogs = try Console.getRecentEntries(type: .coreAudio, lookbackSeconds: 2)
+            let coreMediaLogs = try Console.getRecentEntries(type: .coreMedia, lookbackSeconds: 2)
             
             allStats.append(contentsOf: CMPlayerParser.parseMusicConsoleLogs(musicLogs))
             if enableBitDepthDetection {
@@ -210,7 +211,8 @@ class OutputDevices: ObservableObject {
             }
 
             allStats.sort(by: {$0.priority > $1.priority})
-            Diagnostics.shared.log("OutputDevices: getAllStats() -> \(allStats.map { "sr=\($0.sampleRate) bd=\($0.bitDepth) p=\($0.priority)" }.joined(separator: ", "))")
+            let elapsedMs = Int(Date().timeIntervalSince(pollStart) * 1000)
+            Diagnostics.shared.log("OutputDevices: getAllStats(\(elapsedMs)ms) -> \(allStats.map { "sr=\($0.sampleRate) bd=\($0.bitDepth) p=\($0.priority)" }.joined(separator: ", "))")
         }
         catch {
             Diagnostics.shared.log("OutputDevices: getAllStats() error: \(error)")

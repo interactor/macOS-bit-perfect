@@ -30,18 +30,40 @@ enum EntryType: String {
 }
 
 class Console {
-    static func getRecentEntries(type: EntryType) throws -> [SimpleConsole] {
-        var messages = [SimpleConsole]()
-        let store = try OSLogStore.local()
-        let duration = store.position(timeIntervalSinceEnd: -10.0)
-        let entries = try store.getEntries(with: [], at: duration, matching: type.predicate)
-        // for some reason AnySequence to Array turns it into a empty array?
-        for entry in entries {
-            let consoleMessage = SimpleConsole(date: entry.date, message: entry.composedMessage)
-            //print((date: entry.date, message: entry.composedMessage))
-            messages.append(consoleMessage)
+    private static let storeQueue = DispatchQueue(label: "Console.OSLogStore.queue")
+    private static var cachedStore: OSLogStore?
+
+    private static func getStore() throws -> OSLogStore {
+        try storeQueue.sync {
+            if let cachedStore {
+                return cachedStore
+            }
+            let store = try OSLogStore.local()
+            cachedStore = store
+            return store
         }
-        
-        return messages.reversed()
+    }
+
+    static func getRecentEntries(
+        type: EntryType,
+        lookbackSeconds: TimeInterval = 10,
+        maxEntries: Int = 2_000
+    ) throws -> [SimpleConsole] {
+        var messages = [SimpleConsole]()
+        messages.reserveCapacity(min(maxEntries, 256))
+
+        let store = try getStore()
+        let start = store.position(timeIntervalSinceEnd: -lookbackSeconds)
+
+        // Iterate from newest to oldest and stop early to keep polling low-latency.
+        let entries = try store.getEntries(with: [.reverse], at: start, matching: type.predicate)
+        for case let entry as OSLogEntryLog in entries {
+            messages.append(SimpleConsole(date: entry.date, message: entry.composedMessage))
+            if messages.count >= maxEntries {
+                break
+            }
+        }
+
+        return messages
     }
 }

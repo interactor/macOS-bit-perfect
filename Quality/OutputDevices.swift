@@ -267,11 +267,15 @@ class OutputDevices: ObservableObject {
     private func logEmptyStatsSample(
         musicLogs: [SimpleConsole],
         coreMediaLogs: [SimpleConsole],
-        coreAudioLogs: [SimpleConsole]
+        coreAudioLogs: [SimpleConsole],
+        force: Bool = false,
+        tailMaxLines: Int = 3
     ) {
-        if let last = lastEmptyStatsSampleLoggedAt,
-           Date().timeIntervalSince(last) < emptyStatsSampleIntervalSeconds {
-            return
+        if !force {
+            if let last = lastEmptyStatsSampleLoggedAt,
+               Date().timeIntervalSince(last) < emptyStatsSampleIntervalSeconds {
+                return
+            }
         }
         lastEmptyStatsSampleLoggedAt = Date()
 
@@ -292,6 +296,19 @@ class OutputDevices: ObservableObject {
             }
 
             return picked.reversed()
+        }
+
+        func formatEntry(_ entry: SimpleConsole) -> String {
+            let message = entry.message.count > 240
+                ? String(entry.message.prefix(240)) + "…"
+                : entry.message
+            let age = Date().timeIntervalSince(entry.date)
+            return "[\(entry.process)|\(entry.category)] age=\(String(format: "%.3f", age))s \(message)"
+        }
+
+        func tailLines(_ logs: [SimpleConsole], maxLines: Int) -> [String] {
+            if logs.isEmpty { return [] }
+            return logs.suffix(maxLines).map { formatEntry($0) }
         }
 
         let musicCandidates = pickCandidates(
@@ -318,11 +335,46 @@ class OutputDevices: ObservableObject {
         for line in musicCandidates {
             Diagnostics.shared.log("OutputDevices: emptyStats music: \(line)")
         }
+        if musicCandidates.isEmpty {
+            for line in tailLines(musicLogs, maxLines: tailMaxLines) {
+                Diagnostics.shared.log("OutputDevices: emptyStats music tail: \(line)")
+            }
+        }
         for line in coreMediaCandidates {
             Diagnostics.shared.log("OutputDevices: emptyStats coremedia: \(line)")
         }
+        if coreMediaCandidates.isEmpty {
+            for line in tailLines(coreMediaLogs, maxLines: tailMaxLines) {
+                Diagnostics.shared.log("OutputDevices: emptyStats coremedia tail: \(line)")
+            }
+        }
         for line in coreAudioCandidates {
             Diagnostics.shared.log("OutputDevices: emptyStats coreaudio: \(line)")
+        }
+        if coreAudioCandidates.isEmpty {
+            for line in tailLines(coreAudioLogs, maxLines: tailMaxLines) {
+                Diagnostics.shared.log("OutputDevices: emptyStats coreaudio tail: \(line)")
+            }
+        }
+    }
+
+    func dumpRecentOSLogs(lookbackSeconds: TimeInterval = 10, maxTailLines: Int = 10) {
+        Diagnostics.shared.log("Diagnostics: dumpRecentOSLogs lookback=\(Int(lookbackSeconds))s")
+
+        do {
+            let musicLogs = try Console.getRecentEntries(type: .music, lookbackSeconds: lookbackSeconds, maxEntries: 2_000)
+            let coreMediaLogs = try Console.getRecentEntries(type: .coreMedia, lookbackSeconds: lookbackSeconds, maxEntries: 2_000)
+            let coreAudioLogs = try Console.getRecentEntries(type: .coreAudio, lookbackSeconds: lookbackSeconds, maxEntries: 2_000)
+
+            logEmptyStatsSample(
+                musicLogs: musicLogs,
+                coreMediaLogs: coreMediaLogs,
+                coreAudioLogs: coreAudioLogs,
+                force: true,
+                tailMaxLines: maxTailLines
+            )
+        } catch {
+            Diagnostics.shared.log("Diagnostics: dumpRecentOSLogs error: \(error)")
         }
     }
     

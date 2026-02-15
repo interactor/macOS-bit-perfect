@@ -117,6 +117,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let diagnosticsMenu = NSMenuItem(title: "Diagnostics", action: nil, keyEquivalent: "")
         diagnosticsMenu.submenu = NSMenu()
         diagnosticsMenu.submenu?.addItem(NSMenuItem(title: "Copy status", action: #selector(copyDiagnosticsStatus(_:)), keyEquivalent: ""))
+        diagnosticsMenu.submenu?.addItem(NSMenuItem(title: "Dump recent OS logs", action: #selector(dumpRecentOSLogs(_:)), keyEquivalent: ""))
         diagnosticsMenu.submenu?.addItem(NSMenuItem(title: "Export debug log", action: #selector(exportDiagnosticsLog(_:)), keyEquivalent: ""))
         self.diagnosticsMenuItem = diagnosticsMenu
         menu.addItem(diagnosticsMenu)
@@ -174,6 +175,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             alert.alertStyle = .warning
             alert.runModal()
         }
+    }
+
+    @objc private func dumpRecentOSLogs(_ item: NSMenuItem) {
+        outputDevices.dumpRecentOSLogs()
     }
     
     func handleDevicesMenu() {

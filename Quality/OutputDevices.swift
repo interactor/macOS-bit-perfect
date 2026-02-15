@@ -16,6 +16,7 @@ class OutputDevices: ObservableObject {
     @Published var defaultOutputDevice: AudioDevice?
     @Published var outputDevices = [AudioDevice]()
     @Published var currentSampleRate: Float64?
+    @Published var currentBitDepth: Int32?
     
     private var enableBitDepthDetection = Defaults.shared.userPreferBitDepthDetection
     private var enableBitDepthDetectionCancellable: AnyCancellable?
@@ -31,6 +32,7 @@ class OutputDevices: ObservableObject {
     private var playbackMonitorCancellable: AnyCancellable?
     private var lastMusicSpecDetectedAt: Date?
     private var lastNonMusicAppliedAt: Date?
+    private var lastEmptyStatsSampleLoggedAt: Date?
 
     private var consoleQueue = DispatchQueue(label: "consoleQueue", qos: .userInteractive)
     
@@ -51,6 +53,7 @@ class OutputDevices: ObservableObject {
     private let musicSwitchWindowSeconds: TimeInterval = 0.5
 
     private let osLogLookbackSeconds: TimeInterval = 20
+    private let emptyStatsSampleIntervalSeconds: TimeInterval = 5
     
     var timerActive = false
     var timerCalls = 0
@@ -136,10 +139,33 @@ class OutputDevices: ObservableObject {
     
     func getDeviceSampleRate() {
         let defaultDevice = self.selectedOutputDevice ?? self.defaultOutputDevice
-        guard let sampleRate = defaultDevice?.nominalSampleRate else { return }
-        if sampleRate != self.previousSampleRate {
+        guard let device = defaultDevice else { return }
+        guard let sampleRate = device.nominalSampleRate else { return }
+
+        let bitDepth: UInt32? = device
+            .streams(scope: .output)
+            ?.first
+            ?.physicalFormat
+            ?.mBitsPerChannel
+
+        let didChangeBitDepth = bitDepth != nil && bitDepth != previousBitsPerChannel
+        let didChangeSampleRate = sampleRate != previousSampleRate
+
+        if didChangeBitDepth {
+            Diagnostics.shared.log("OutputDevices: device bitDepth changed -> \(bitDepth!)")
+            previousBitsPerChannel = bitDepth
+        }
+
+        if didChangeSampleRate {
             Diagnostics.shared.log("OutputDevices: device sampleRate changed -> \(sampleRate)")
-            self.updateSampleRate(sampleRate)
+        }
+
+        if didChangeSampleRate || didChangeBitDepth {
+            updateSampleRate(
+                sampleRate,
+                runScript: didChangeSampleRate,
+                bitDepthOverride: bitDepth.map { Int32($0) }
+            )
         }
     }
 
@@ -227,11 +253,81 @@ class OutputDevices: ObservableObject {
                 "ca=\(coreAudioLogs.count) age=\(newestAgeString(coreAudioLogs))s " +
                 "-> \(allStats.map { "sr=\($0.sampleRate) bd=\($0.bitDepth) p=\($0.priority)" }.joined(separator: ", "))"
             )
+
+            if allStats.isEmpty {
+                logEmptyStatsSample(
+                    musicLogs: musicLogs,
+                    coreMediaLogs: coreMediaLogs,
+                    coreAudioLogs: coreAudioLogs
+                )
+            }
         } catch {
             Diagnostics.shared.log("OutputDevices: getAllStats() error: \(error)")
         }
 
         return allStats
+    }
+
+    private func logEmptyStatsSample(
+        musicLogs: [SimpleConsole],
+        coreMediaLogs: [SimpleConsole],
+        coreAudioLogs: [SimpleConsole]
+    ) {
+        if let last = lastEmptyStatsSampleLoggedAt,
+           Date().timeIntervalSince(last) < emptyStatsSampleIntervalSeconds {
+            return
+        }
+        lastEmptyStatsSampleLoggedAt = Date()
+
+        func pickCandidates(_ logs: [SimpleConsole], keywords: [String], maxLines: Int) -> [String] {
+            var picked: [String] = []
+            picked.reserveCapacity(maxLines)
+
+            for entry in logs.reversed() {
+                if keywords.contains(where: { entry.message.contains($0) }) {
+                    let message = entry.message.count > 240
+                        ? String(entry.message.prefix(240)) + "…"
+                        : entry.message
+                    picked.append("[\(entry.process)|\(entry.category)] \(message)")
+                    if picked.count >= maxLines {
+                        break
+                    }
+                }
+            }
+
+            return picked.reversed()
+        }
+
+        let musicCandidates = pickCandidates(
+            musicLogs,
+            keywords: ["audioCapabilities", "asbdSampleRate", "sdBitDepth", "sdBitRate"],
+            maxLines: 3
+        )
+        let coreMediaCandidates = pickCandidates(
+            coreMediaLogs,
+            keywords: ["Creating AudioQueue", "sampleRate:"],
+            maxLines: 3
+        )
+        let coreAudioCandidates = pickCandidates(
+            coreAudioLogs,
+            keywords: ["ACAppleLosslessDecoder", "Input format:"],
+            maxLines: 3
+        )
+
+        Diagnostics.shared.log(
+            "OutputDevices: emptyStats sample " +
+            "musicHits=\(musicCandidates.count) cmHits=\(coreMediaCandidates.count) caHits=\(coreAudioCandidates.count)"
+        )
+
+        for line in musicCandidates {
+            Diagnostics.shared.log("OutputDevices: emptyStats music: \(line)")
+        }
+        for line in coreMediaCandidates {
+            Diagnostics.shared.log("OutputDevices: emptyStats coremedia: \(line)")
+        }
+        for line in coreAudioCandidates {
+            Diagnostics.shared.log("OutputDevices: emptyStats coreaudio: \(line)")
+        }
     }
     
     func switchLatestSampleRate(recursion: Bool = false) {
@@ -268,7 +364,7 @@ class OutputDevices: ObservableObject {
         if sampleRate != previousSampleRate {
             Diagnostics.shared.log("OutputDevices: fallback switching nominalSampleRate=\(sampleRate)")
             defaultDevice.setNominalSampleRate(sampleRate)
-            updateSampleRate(sampleRate)
+            updateSampleRate(sampleRate, runScript: true)
         }
     }
 
@@ -301,7 +397,7 @@ class OutputDevices: ObservableObject {
         if nonMusicDefaultSampleRate != previousSampleRate {
             Diagnostics.shared.log("OutputDevices: default fallback nominalSampleRate=\(nonMusicDefaultSampleRate)")
             defaultDevice.setNominalSampleRate(nonMusicDefaultSampleRate)
-            updateSampleRate(nonMusicDefaultSampleRate)
+            updateSampleRate(nonMusicDefaultSampleRate, runScript: true)
         }
     }
 
@@ -314,7 +410,11 @@ class OutputDevices: ObservableObject {
         Diagnostics.shared.log("OutputDevices: applyFormat(reason=\(reason)) sr=\(format.mSampleRate) bits=\(format.mBitsPerChannel)")
         setFormats(device: device, format: format)
         previousBitsPerChannel = format.mBitsPerChannel
-        updateSampleRate(format.mSampleRate)
+        updateSampleRate(
+            format.mSampleRate,
+            runScript: true,
+            bitDepthOverride: Int32(format.mBitsPerChannel)
+        )
     }
 
     private enum SampleRateFamily {
@@ -395,16 +495,33 @@ class OutputDevices: ObservableObject {
         }
     }
     
-    func updateSampleRate(_ sampleRate: Float64) {
+    func updateSampleRate(
+        _ sampleRate: Float64,
+        runScript: Bool = true,
+        bitDepthOverride: Int32? = nil
+    ) {
         self.previousSampleRate = sampleRate
         DispatchQueue.main.async {
             let readableSampleRate = sampleRate / 1000
             self.currentSampleRate = readableSampleRate
-            
+
+            if let bitDepthOverride {
+                self.currentBitDepth = bitDepthOverride
+            }
+
             let delegate = AppDelegate.instance
-            delegate?.statusItemTitle = String(format: "%.1f kHz", readableSampleRate)
+            let bitDepthLabel = bitDepthOverride ?? self.currentBitDepth
+            if let bitDepthLabel {
+                delegate?.statusItemTitle = String(format: "%.1f kHz / %d-bit", readableSampleRate, bitDepthLabel)
+            }
+            else {
+                delegate?.statusItemTitle = String(format: "%.1f kHz", readableSampleRate)
+            }
         }
-        self.runUserScript(sampleRate)
+
+        if runScript {
+            self.runUserScript(sampleRate)
+        }
     }
     
     func runUserScript(_ sampleRate: Float64) {

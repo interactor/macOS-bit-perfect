@@ -11,6 +11,8 @@ import Cocoa
 
 struct SimpleConsole {
     let date: Date
+    let process: String
+    let category: String
     let message: String
 }
 
@@ -61,7 +63,14 @@ class Console {
             if entry.date < cutoff {
                 break
             }
-            messages.append(SimpleConsole(date: entry.date, message: entry.composedMessage))
+            messages.append(
+                SimpleConsole(
+                    date: entry.date,
+                    process: entry.process,
+                    category: entry.category,
+                    message: entry.composedMessage
+                )
+            )
             if messages.count >= maxEntries {
                 break
             }

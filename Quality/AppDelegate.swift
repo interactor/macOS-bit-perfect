@@ -140,6 +140,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let isMusicApp = outputDevices.currentTrack?.isMusicApp.description ?? "nil"
         let title = outputDevices.currentTrack?.title ?? "nil"
         let sampleRate = outputDevices.currentSampleRate.map { String(format: "%.1f kHz", $0) } ?? "nil"
+        let bitDepth = outputDevices.currentBitDepth.map { "\($0)-bit" } ?? "nil"
         let device = (outputDevices.selectedOutputDevice ?? outputDevices.defaultOutputDevice)?.name ?? "nil"
 
         let status = """
@@ -149,7 +150,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         - nowPlaying bundleId: \(bundleId)
         - nowPlaying isMusicApp: \(isMusicApp)
         - track: \(title)
-        - app sampleRate label: \(sampleRate)
+        - app format label: \(sampleRate) / \(bitDepth)
         """
 
         let pasteboard = NSPasteboard.general

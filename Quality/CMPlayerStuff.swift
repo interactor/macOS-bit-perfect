@@ -130,9 +130,11 @@ class CMPlayerParser {
             }
             
             if rawMessage.contains("Creating AudioQueue") {
-                if let subSampleRate = rawMessage.firstSubstring(between: "sampleRate:", and: .end) {
-                    let strSampleRate = String(subSampleRate)
-                    sampleRate = Double(strSampleRate)
+                if let range = rawMessage.range(of: "sampleRate:") {
+                    let after = rawMessage[range.upperBound...]
+                    let trimmed = after.trimmingCharacters(in: .whitespaces)
+                    let number = trimmed.prefix { $0.isNumber || $0 == "." }
+                    sampleRate = Double(number)
                 }
             }
             

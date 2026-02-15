@@ -85,7 +85,7 @@ class OutputDevices: ObservableObject {
         // Keep the status item in sync even when the user changes the format manually
         // via Audio MIDI Setup (CoreAudio notifications are not always reliable across macOS versions).
         deviceFormatMonitorCancellable = Timer
-            .publish(every: 1, on: .main, in: .default)
+            .publish(every: 1, on: .main, in: .common)
             .autoconnect()
             .sink { _ in
                 self.getDeviceSampleRate()
@@ -93,7 +93,7 @@ class OutputDevices: ObservableObject {
 
         // Primary control loop.
         playbackMonitorCancellable = Timer
-            .publish(every: pollIntervalSeconds, on: .main, in: .default)
+            .publish(every: pollIntervalSeconds, on: .main, in: .common)
             .autoconnect()
             .sink { _ in
                 self.consoleQueue.async {
@@ -118,7 +118,7 @@ class OutputDevices: ObservableObject {
         if timerCancellable != nil { return }
         Diagnostics.shared.log("OutputDevices: renewTimer()")
         timerCancellable = Timer
-            .publish(every: 2, on: .main, in: .default)
+            .publish(every: 2, on: .main, in: .common)
             .autoconnect()
             .sink { _ in
                 // Keep retrying longer since sample rate detection may lag on newer macOS versions.

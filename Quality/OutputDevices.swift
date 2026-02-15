@@ -142,11 +142,7 @@ class OutputDevices: ObservableObject {
         guard let device = defaultDevice else { return }
         guard let sampleRate = device.nominalSampleRate else { return }
 
-        let bitDepth: UInt32? = device
-            .streams(scope: .output)
-            ?.first
-            ?.physicalFormat
-            ?.mBitsPerChannel
+        let bitDepth: UInt32? = device.streams(scope: .output)?.first?.physicalFormat?.mBitsPerChannel
 
         let didChangeBitDepth = bitDepth != nil && bitDepth != previousBitsPerChannel
         let didChangeSampleRate = sampleRate != previousSampleRate

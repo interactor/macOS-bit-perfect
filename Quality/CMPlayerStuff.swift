@@ -23,7 +23,7 @@ class CMPlayerParser {
         var sampleRate: Double?
         var bitDepth: Int?
         
-        var stats = [CMPlayerStats]()
+        var latestStat: CMPlayerStats?
         
         for entry in entries {
             // ignore useless log messages for faster switching
@@ -55,17 +55,19 @@ class CMPlayerParser {
             if let sr = sampleRate,
                let bd = bitDepth {
                 let stat = CMPlayerStats(sampleRate: sr * 1000, bitDepth: bd, date: date, priority: 1)
-                stats.append(stat)
+                latestStat = stat
                 sampleRate = nil
                 bitDepth = nil
                 print("detected stat \(stat)")
-                break
             }
             
             lastDate = date
             
         }
-        return stats
+        if let latestStat {
+            return [latestStat]
+        }
+        return []
     }
     
     static func parseCoreAudioConsoleLogs(_ entries: [SimpleConsole]) -> [CMPlayerStats] {
@@ -74,7 +76,7 @@ class CMPlayerParser {
         var sampleRate: Double?
         var bitDepth: Int?
         
-        var stats = [CMPlayerStats]()
+        var latestStat: CMPlayerStats?
         
         for entry in entries {
             let date = entry.date
@@ -100,17 +102,19 @@ class CMPlayerParser {
             if let sr = sampleRate,
                let bd = bitDepth {
                 let stat = CMPlayerStats(sampleRate: sr, bitDepth: bd, date: date, priority: 5)
-                stats.append(stat)
+                latestStat = stat
                 sampleRate = nil
                 bitDepth = nil
                 print("detected stat \(stat)")
-                break
             }
             
             lastDate = date
             
         }
-        return stats
+        if let latestStat {
+            return [latestStat]
+        }
+        return []
     }
     
     static func parseCoreMediaConsoleLogs(_ entries: [SimpleConsole]) -> [CMPlayerStats] {
@@ -119,7 +123,7 @@ class CMPlayerParser {
         var sampleRate: Double?
         let bitDepth = 24 // Core Media don't provide bit depth, but I am keeping this for now, since it seems to be the first to deliver accurate bitrate data, fairly consistently.
         
-        var stats = [CMPlayerStats]()
+        var latestStat: CMPlayerStats?
         
         for entry in entries {
             let date = entry.date
@@ -129,7 +133,7 @@ class CMPlayerParser {
                 sampleRate = nil
             }
             
-            if rawMessage.contains("Creating AudioQueue") {
+            if rawMessage.contains("AudioQueue") && rawMessage.contains("sampleRate:") {
                 if let range = rawMessage.range(of: "sampleRate:") {
                     let after = rawMessage[range.upperBound...]
                     let trimmed = after.trimmingCharacters(in: .whitespaces)
@@ -140,15 +144,17 @@ class CMPlayerParser {
             
             if let sr = sampleRate {
                 let stat = CMPlayerStats(sampleRate: sr, bitDepth: bitDepth, date: date, priority: 2)
-                stats.append(stat)
+                latestStat = stat
                 sampleRate = nil
                 print("detected stat \(stat)")
-                break
             }
             
             lastDate = date
             
         }
-        return stats
+        if let latestStat {
+            return [latestStat]
+        }
+        return []
     }
 }
